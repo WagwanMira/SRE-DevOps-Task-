@@ -1,0 +1,72 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: app-from-mindbox-deployment
+spec:
+  # Создадим 2 реплики на ночь, 
+  # а днем их кол-во до 4 будет поднимать hpa.
+  replicas: 2
+  selector: 
+    matchLabels:
+      app: app-from-mindbox
+  template: 
+    metadata:
+    labels:
+      app: app-from-mindbox
+    spec:
+      # Установим лимит по потреблению ресурсов памяти и процессора, зная, 
+      # что при запуске приложение ест больше ресурсов процессора.
+      resourses:
+        requests:
+          cpu: "0.1"
+          memory: "128Mi"
+        limits:
+          cpu: "0.5"
+          memory: "128Mi"
+      # podAntiAffinity, чтобы поды не размещались на одной ноде и находились в разных зонах.
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchExpressions:
+              - key: app
+                operator: In
+                values:
+                - app-from-mindbox
+            topologyKey: kubernetes.io/zone
+      # Дальше используем rollingUpdate, чтобы без простоев заменять старые поды на новые.
+      # Пусть максимальное кол-во подов добавленных во время обновления будет равно 1, также максимальное
+      # кол-во подов недоступных во время обновления будет равно 1. 
+      strategy:
+        type: RollingUpdate
+        rollingUpdate:
+          maxSurge: 1
+          maxUnavailable: 1
+      containers:
+      - name: app-from-mindbox-container
+        image: app-from-minbox:latest
+        # Используем initContainers для инициализации приложения.
+        initContainers:
+        - name: init-myservice
+        image: busybox:1.28
+        command: ['sh', '-c','sleep 10; echo "Инициализация завершена"'  
+---
+# Сам hpa, который будет следить за кол-вом реплик + уклон в минимальное потребление ресурсов. 
+apiVersion: autoscaling/v2beta2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: app-from-mindbox-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: app-from-mindbox-deployment
+  minReplicas: 2 
+  maxReplicas: 4
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 50   
